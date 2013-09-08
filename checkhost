@@ -1,0 +1,126 @@
+#!/usr/bin/env python
+import sh
+import sys
+from os import path
+
+def load_statusbot():
+    '''Load the statusbot command'''
+    try:
+        # use the one from $PATH
+        statusbot = sh.Command('statusbot')
+    except sh.CommandNotFound:
+        print >>sys.stderr, "Please make sure statusbot is in your path"
+        sys.exit(2)
+
+    return statusbot
+
+
+def guess_distro_lsb_release():
+    '''Guess the distro from lsb_release command'''
+    # Try to find via lsb_release
+    try:
+        from sh import lsb_release
+        lines = lsb_release(a=True).split('\n')
+        if len(lines) <= 1:
+            return None
+        if not lines[0].startswith('Distributor'):
+            return None
+        return lines[0].split('\t')[-1].lower()
+    except ImportError:
+        return None
+
+
+def get_hostname():
+    '''Get the hostname for the current machine'''
+    from sh import hostname
+    return hostname(s=True).strip()
+
+
+def guess_distro_release_file():
+    '''Guess the distro from a release file in /etc'''
+    if path.exists('/etc/debian_version'):
+        return "debian"
+    if path.exists('/etc/arch-release'):
+        return "arch"
+
+
+def guess_distro():
+    '''Guess the distro we're running on'''
+
+    guessers = [
+        guess_distro_lsb_release,
+        guess_distro_release_file,
+    ]
+
+    for guesser in guessers:
+        distro = guesser()
+        if distro is not None:
+            return distro
+
+    print >>sys.stderr, "Could not identify the distro running on"
+    sys.exit(3)
+
+
+class CheckHostArch(object):
+    '''A class collecting checks for ArchLinux'''
+    def __init__(self):
+        self.pacman = sh.Command('pacman')
+
+    def update_package_database(self):
+        '''Make sure the package database is up-to-date'''
+        self.pacman('-Sy')
+
+    def check_updates(self):
+        '''Check if there are any updates to install'''
+        self.update_package_database()
+        try:
+            ret = self.pacman('-Qu').strip()
+            return len(ret.split('\n'))
+        # if there's no updates, pacman -Qu returns 1
+        except sh.ErrorReturnCode_1:
+            return 0
+
+class CheckHostDebian(object):
+    '''A class collecting checks for Debian'''
+    def __init__(self):
+        self.apt_get = sh.Command('apt-get')
+
+    def update_package_database(self):
+        '''Make sure the package database is up-to-date'''
+        self.apt_get.update()
+
+    def check_updates(self):
+        '''Check if there are any updates to install'''
+        self.update_package_database()
+        from sh import grep
+        return int(grep(self.apt_get.upgrade(s=True), '-c', '^Inst'))
+
+checkers = {
+    'arch': CheckHostArch,
+    'debian': CheckHostDebian,
+    'ubuntu': CheckHostDebian,
+}
+
+def main():
+    statusbot = load_statusbot()
+    distro = guess_distro()
+    hostname = get_hostname()
+
+    #print >>sys.stderr, "Running on %s" % distro
+    try:
+        checker = checkers[distro]()
+        num_updates = checker.check_updates()
+        if num_updates > 0:
+            plural = ''
+            if num_updates > 1:
+                plural = 's'
+            msg = "%s needs %d update%s" % (hostname, num_updates, plural)
+        else:
+            msg = "%s is up-to-date" % (hostname)
+        statusbot.post(msg)
+    except KeyError:
+        print >>sys.stderr, "No checks found for distro '%s'" % distro
+        sys.exit(4)
+
+if __name__ == "__main__":
+    main()
