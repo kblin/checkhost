@@ -93,7 +93,7 @@ class CheckHostDebian(object):
         '''Check if there are any updates to install'''
         self.update_package_database()
         from sh import grep
-        return int(grep(self.apt_get.upgrade(s=True), '-c', '^Inst'))
+        return int(grep(self.apt_get.upgrade(s=True), '-c', '^Inst', _ok_code=[0,1]))
 
 checkers = {
     'arch': CheckHostArch,
